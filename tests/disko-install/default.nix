@@ -32,7 +32,7 @@ pkgs.testers.nixosTest {
 
   testScript = ''
     def create_test_machine(
-        oldmachine=None, **kwargs
+        oldmachine, **kwargs
     ):  # taken from <nixpkgs/nixos/tests/installer.nix>
         start_command = [
             "${pkgs.qemu_test}/bin/qemu-kvm",
