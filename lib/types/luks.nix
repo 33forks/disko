@@ -62,10 +62,25 @@ let
     '';
 
   # Use this open command when you want to open it after full enrollment, e.g. at mount time or in standard enrollments.
-  cryptsetupOpen = createOpenCommand {
-    inherit keyFileArgs;
-    tokenType = if config.enrollFido2 then "systemd-fido2" else null;
-  };
+  cryptsetupOpen = ''
+    ${lib.optionalString config.askPassword ''
+      if [ -z "''${password:-}" ]; then
+        if [ -z ''${IN_DISKO_TEST+x} ]; then
+          set +x
+          echo "Enter password for ${config.device}"
+          IFS= read -r -s password
+          export password
+          set -x
+        else
+          export password=disko
+        fi
+      fi
+    ''}
+    ${createOpenCommand {
+      inherit keyFileArgs;
+      tokenType = if config.enrollFido2 then "systemd-fido2" else null;
+    }}
+  '';
 
   # Use this open command when you want to open it immediately after the formatting and before the stage 2 process is finished (i.e. the wipe slot).
   formatCryptsetupOpen = createOpenCommand {
@@ -297,17 +312,6 @@ in
         {
           dev = ''
             if ! cryptsetup status "${config.name}" >/dev/null 2>/dev/null; then
-              ${lib.optionalString config.askPassword ''
-                if [ -z ''${IN_DISKO_TEST+x} ]; then
-                  set +x
-                  echo "Enter password for ${config.device}"
-                  IFS= read -r -s password
-                  export password
-                  set -x
-                else
-                  export password=disko
-                fi
-              ''}
               ${cryptsetupOpen}
             fi
             ${lib.optionalString (config.content != null) contentMount.dev or ""}
