@@ -191,12 +191,15 @@
               (
                 TEMPDIR="$(mktemp -d)";
                 MNTPOINT="$(mktemp -d)";
-                ${lib.optionalString (
-                  config.passwordFile != null
-                ) ''bcachefs unlock -k session "/dev/disk/by-uuid/${config.uuid}" < "${config.passwordFile}";''}
-                bcachefs mount \
+                ${lib.optionalString (config.passwordFile != null) ''
+                  if ! bcachefs unlock -k session "/dev/disk/by-uuid/${config.uuid}" < "${config.passwordFile}"; then
+                    test -d "/sys/fs/bcachefs/${config.uuid}";
+                  fi;
+                ''}
+                mount \
+                  -t bcachefs \
                   -o "${lib.concatStringsSep "," (lib.unique ([ "X-mount.mkdir" ] ++ config.mountOptions))}" \
-                  UUID="${config.uuid}" \
+                  "/dev/disk/by-uuid/${config.uuid}" \
                   "$MNTPOINT";
                 trap 'umount "$MNTPOINT"; rm -rf "$MNTPOINT"; rm -rf "$TEMPDIR";' EXIT;
                 SUBVOL_ABS_PATH="$MNTPOINT/${subvolume.name}";
@@ -227,10 +230,13 @@
                   # @todo Figure out why the "X-mount.mkdir" option here doesn't seem to work,
                   # necessitating running `mkdir` here.
                   mkdir -p "${rootMountPoint}${subvolume.mountpoint}";
-                  ${lib.optionalString (
-                    config.passwordFile != null
-                  ) ''bcachefs unlock -k session "/dev/disk/by-uuid/${config.uuid}" < "${config.passwordFile}";''}
-                  bcachefs mount \
+                  ${lib.optionalString (config.passwordFile != null) ''
+                    if ! bcachefs unlock -k session "/dev/disk/by-uuid/${config.uuid}" < "${config.passwordFile}"; then
+                      test -d "/sys/fs/bcachefs/${config.uuid}";
+                    fi;
+                  ''}
+                  mount \
+                    -t bcachefs \
                     -o "${
                       lib.concatStringsSep "," (
                         lib.unique (
@@ -242,7 +248,7 @@
                         )
                       )
                     }" \
-                    UUID="${config.uuid}" \
+                    "/dev/disk/by-uuid/${config.uuid}" \
                     "${rootMountPoint}${subvolume.mountpoint}";
                 fi;
               '';
@@ -258,12 +264,15 @@
                   # @todo Figure out why the "X-mount.mkdir" option here doesn't seem to work,
                   # necessitating running `mkdir` here.
                   mkdir -p "${rootMountPoint}${config.mountpoint}";
-                  ${lib.optionalString (
-                    config.passwordFile != null
-                  ) ''bcachefs unlock -k session "/dev/disk/by-uuid/${config.uuid}" < "${config.passwordFile}";''}
-                  bcachefs mount \
+                  ${lib.optionalString (config.passwordFile != null) ''
+                    if ! bcachefs unlock -k session "/dev/disk/by-uuid/${config.uuid}" < "${config.passwordFile}"; then
+                      test -d "/sys/fs/bcachefs/${config.uuid}";
+                    fi;
+                  ''}
+                  mount \
+                    -t bcachefs \
                     -o "${lib.concatStringsSep "," (lib.unique ([ "X-mount.mkdir" ] ++ config.mountOptions))}" \
-                    UUID="${config.uuid}" \
+                    "/dev/disk/by-uuid/${config.uuid}" \
                     "${rootMountPoint}${config.mountpoint}";
                 fi;
               '';

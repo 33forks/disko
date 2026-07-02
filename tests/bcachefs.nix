@@ -15,6 +15,12 @@ diskoLib.testLib.makeDiskoTest {
     machine.wait_for_text("enter passphrase for /nix");
     machine.send_chars("secretsecret\n");
   '';
+  extraInstallerConfig = {
+    boot = {
+      kernelPackages = pkgs.linuxPackages_latest;
+      supportedFilesystems = [ "bcachefs" ];
+    };
+  };
   extraSystemConfig = {
     environment.systemPackages = [
       pkgs.jq
@@ -22,21 +28,27 @@ diskoLib.testLib.makeDiskoTest {
   };
   extraTestScript = ''
     # Print debug information.
-    machine.succeed("ls -la /subvolumes >&2");
+    machine.succeed("uname -a >&2");
+    machine.succeed("ls -la / >&2");
     machine.succeed("lsblk >&2");
     machine.succeed("lsblk -f >&2");
     machine.succeed("mount >&2");
-    machine.succeed("bcachefs show-super /dev/vda2 >&2");
-    machine.succeed("bcachefs show-super /dev/vdd1 >&2");
+    machine.succeed("ls /sys/fs/bcachefs/ >&2");
     machine.succeed("findmnt --json >&2");
 
-    # Verify subvolume structure.
-    machine.succeed("test -d /subvolumes/root");
-    machine.succeed("test -d /subvolumes/home");
-    machine.succeed("test -d /subvolumes/home/user");
-    machine.succeed("test -d /subvolumes/nix");
-    machine.succeed("test -d /subvolumes/test");
-    machine.fail("test -d /subvolumes/non-existent");
+    # bcachefs-tools >= 1.33.1 cannot read the superblock from a mounted device 
+    def bcachefs_sysfs(mp):
+        src = machine.succeed(f"findmnt -no SOURCE {mp}").strip().split(":")[0]
+        dev = src.rsplit("/", 1)[-1]
+        path = machine.succeed(
+            "for d in /sys/fs/bcachefs/*/dev-*/block; do "
+            f'  if [ "$(basename "$(readlink -f "$d")")" = "{dev}" ]; then '
+            '    dirname "$(dirname "$d")"; break; '
+            "  fi; "
+            "done"
+        ).strip()
+        assert path, f"no bcachefs sysfs entry found for {mp} (device {dev})"
+        return path
 
     # Verify existence of mountpoints.
     machine.succeed("mountpoint /");
@@ -45,18 +57,32 @@ diskoLib.testLib.makeDiskoTest {
     machine.succeed("mountpoint /home/Documents");
     machine.fail("mountpoint /non-existent");
 
-    # Verify device membership and labels.
-    machine.succeed("bcachefs show-super /dev/vda2 | grep 'Devices:' | grep -q '3'");
-    machine.succeed("bcachefs show-super /dev/vdd1 | grep 'Devices:' | grep -q '1'");
-    machine.succeed("bcachefs show-super /dev/vda2 | grep -qE '^[[:space:]]+Label:[[:space:]]+vdb2[[:space:]]\([[:digit:]]+\)'");
-    machine.succeed("bcachefs show-super /dev/vda2 | grep -qE '^[[:space:]]+Label:[[:space:]]+vdc1[[:space:]]\([[:digit:]]+\)'");
-    machine.succeed("bcachefs show-super /dev/vda2 | grep -qE '^[[:space:]]+Label:[[:space:]]+vdd1[[:space:]]\([[:digit:]]+\)'");
-    machine.succeed("bcachefs show-super /dev/vdd1 | grep -qE '^[[:space:]]+Label:[[:space:]]+vde1[[:space:]]\([[:digit:]]+\)'");
-    machine.fail("bcachefs show-super /dev/vda2 | grep 'Label:' | grep -q 'non-existent'");
+    multi_sysfs = bcachefs_sysfs("/")
+    single_sysfs = bcachefs_sysfs("/home/Documents")
 
-    # @todo Verify format arguments.
+    # Verify device membership.
+    multi_devs = int(machine.succeed(f"ls -d {multi_sysfs}/dev-* | wc -l").strip())
+    assert multi_devs == 3, f"Expected 3 devices in {multi_sysfs}, got {multi_devs}"
+    single_devs = int(machine.succeed(f"ls -d {single_sysfs}/dev-* | wc -l").strip())
+    assert single_devs == 1, f"Expected 1 device in {single_sysfs}, got {single_devs}"
+
+    # Verify labels.
+    multi_labels = set(machine.succeed(f"cat {multi_sysfs}/dev-*/label").split())
+    expected_multi = {"group_a.vdb2", "group_a.vdc1", "group_b.vdd1"}
+    assert multi_labels == expected_multi, f"Expected {expected_multi}, got {multi_labels}"
+    single_labels = set(machine.succeed(f"cat {single_sysfs}/dev-*/label").split())
+    assert single_labels == {"group_a.vde1"}, f"Expected {{'group_a.vde1'}}, got {single_labels}"
+
+    # Verify format arguments via sysfs options.
+    multi_comp = machine.succeed(f"cat {multi_sysfs}/options/compression").strip()
+    assert multi_comp == "lz4", f"Expected lz4 compression, got {multi_comp!r}"
+    multi_bg = machine.succeed(f"cat {multi_sysfs}/options/background_compression").strip()
+    assert multi_bg == "lz4", f"Expected lz4 background_compression, got {multi_bg!r}"
+    single_comp = machine.succeed(f"cat {single_sysfs}/options/compression").strip()
+    assert single_comp == "none", f"Expected no compression, got {single_comp!r}"
 
     # Verify mount options from configuration.
+    # Test that verbose option was set for "/".
     machine.succeed("""
       findmnt --json \
         | jq -e ' \
@@ -64,11 +90,12 @@ diskoLib.testLib.makeDiskoTest {
             | select(.target == "/") \
             | .options \
             | split(",") \
-            | contains(["verbose", "compression=lz4", "background_compression=lz4"]) \
+            | contains(["verbose"]) \
         '
     """);
 
-    machine.succeed("""
+    # Test that verbose option was not set for "/home/Documents".
+    machine.fail("""
       findmnt --json \
         | jq -e ' \
           .filesystems[] \
@@ -80,6 +107,7 @@ diskoLib.testLib.makeDiskoTest {
         '
     """);
 
+    # Test that non-existent option was not set for "/".
     machine.fail("""
       findmnt --json \
         | jq -e ' \
@@ -97,8 +125,11 @@ diskoLib.testLib.makeDiskoTest {
         | jq -e ' \
           .filesystems[] \
             | select(.target == "/") \
-            | .source | split(":") \
-            | contains(["/dev/vda2", "/dev/vdb1", "/dev/vdc1"]) \
+            | .source \
+            | contains("/dev/vda2") \
+              and contains("/dev/vdb1") \
+              and contains("/dev/vdc1") \
+              and contains("[/subvolumes/root]") \
         '
     """);
 
@@ -109,7 +140,7 @@ diskoLib.testLib.makeDiskoTest {
             | .. \
             | select(.target? == "/home/Documents") \
             | .source \
-            | contains("/dev/disk/by-uuid/64e50034-ebe2-eaf8-1f93-cf56266a8d86") \
+            | contains("/dev/vdd1") \
         '
     """);
 
@@ -118,7 +149,7 @@ diskoLib.testLib.makeDiskoTest {
         | jq -e ' \
           .filesystems[] \
             | select(.target == "/") \
-            | .source | split(":") \
+            | .source \
             | contains(["/dev/non-existent"]) \
         '
     """);

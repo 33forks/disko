@@ -6,6 +6,17 @@
   rootMountPoint,
   ...
 }:
+let
+  # REF; nixos/modules/tasks/filesystems.nix
+  specialFSTypes = [
+    "proc"
+    "sysfs"
+    "tmpfs"
+    "ramfs"
+    "devtmpfs"
+    "devpts"
+  ];
+in
 {
   options = {
     type = lib.mkOption {
@@ -46,15 +57,20 @@
     };
     _mount = diskoLib.mkMountOption {
       inherit config options;
-      default = lib.optionalAttrs (config.mountpoint != null) {
-        fs.${config.mountpoint} = ''
-          if ! findmnt ${config.fsType} "${rootMountPoint}${config.mountpoint}" > /dev/null 2>&1; then
-            mount -t ${config.fsType} "${config.device}" "${rootMountPoint}${config.mountpoint}" \
-            ${lib.concatMapStringsSep " " (opt: "-o ${opt}") config.mountOptions} \
-            -o X-mount.mkdir
-          fi
-        '';
-      };
+      default =
+        let
+          isBindMount = builtins.elem "bind" config.mountOptions;
+          device = if isBindMount then "${rootMountPoint}${config.device}" else config.device;
+        in
+        lib.optionalAttrs (config.mountpoint != null) {
+          fs.${config.mountpoint} = ''
+            if ! findmnt ${config.fsType} "${rootMountPoint}${config.mountpoint}" > /dev/null 2>&1; then
+              mount -t ${config.fsType} "${device}" "${rootMountPoint}${config.mountpoint}" \
+              ${lib.concatMapStringsSep " " (opt: "-o ${opt}") config.mountOptions} \
+              -o X-mount.mkdir
+            fi
+          '';
+        };
     };
     _unmount = diskoLib.mkUnmountOption {
       inherit config options;
@@ -85,5 +101,8 @@
       default = _pkgs: [ ];
       description = "Packages";
     };
+  };
+  config = {
+    device = lib.mkIf (lib.elem config.fsType specialFSTypes) (lib.mkDefault config.fsType);
   };
 }

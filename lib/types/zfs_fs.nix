@@ -91,12 +91,14 @@
           updateOptions = builtins.removeAttrs createOptions onetimeProperties;
         in
         ''
-          if ! zfs get type ${config._name} >/dev/null 2>&1; then
+          if ! zfs get type "${config._name}" >/dev/null 2>&1; then
             ${
               if config._createFilesystem then
                 ''
-                  zfs create -up ${config._name} \
-                    ${lib.concatStringsSep " " (lib.mapAttrsToList (n: v: "-o ${n}=${v}") (createOptions))}
+                  zfs create -up "${config._name}" \
+                    ${lib.concatStringsSep " " (
+                      lib.mapAttrsToList (n: v: "-o ${n}=${lib.escapeShellArg v}") (createOptions)
+                    )}
                 ''
               else
                 ''
@@ -107,8 +109,8 @@
           ${lib.optionalString (updateOptions != { }) ''
             else
               zfs set -u ${
-                lib.concatStringsSep " " (lib.mapAttrsToList (n: v: "${n}=${v}") updateOptions)
-              } ${config._name}
+                lib.concatStringsSep " " (lib.mapAttrsToList (n: v: "${n}=${lib.escapeShellArg v}") updateOptions)
+              } "${config._name}"
           ''}
           fi
         '';
@@ -124,36 +126,42 @@
             fi
           '';
         })
-        // lib.optionalAttrs
-          (config.options.mountpoint or "" != "none" && config.options.canmount or "" != "off")
-          {
-            fs.${config.mountpoint} = ''
-              if ! findmnt ${config._name} "${rootMountPoint}${config.mountpoint}" >/dev/null 2>&1; then
-                mount ${config._name} "${rootMountPoint}${config.mountpoint}" \
-                  -o X-mount.mkdir \
-                  ${lib.concatMapStringsSep " " (opt: "-o ${opt}") config.mountOptions} \
-                  ${lib.optionalString ((config.options.mountpoint or "") != "legacy") "-o zfsutil"} \
-                  -t zfs
-              fi
-            '';
-          };
+        //
+          lib.optionalAttrs
+            (config.options.mountpoint or "" != "none" && config.options.canmount or "" != "off")
+            {
+              fs.${config.mountpoint} = ''
+                if ! findmnt ${config._name} "${rootMountPoint}${config.mountpoint}" >/dev/null 2>&1; then
+                  mount ${config._name} "${rootMountPoint}${config.mountpoint}" \
+                    -o X-mount.mkdir \
+                    ${lib.concatMapStringsSep " " (opt: "-o ${opt}") config.mountOptions} \
+                    ${lib.optionalString ((config.options.mountpoint or "") != "legacy") "-o zfsutil"} \
+                    -t zfs
+                fi
+              '';
+            };
     };
 
     _unmount = diskoLib.mkUnmountOption {
       inherit config options;
       default =
         (lib.optionalAttrs (config.options.keylocation or "none" != "none") {
-          dev = "zfs unload-key ${config.name}";
+          dev = ''
+            if [ "$(zfs get keystatus ${config._name} -H -o value)" == "available" ]; then
+              zfs unload-key ${config._name}
+            fi
+          '';
         })
-        // lib.optionalAttrs
-          (config.options.mountpoint or "" != "none" && config.options.canmount or "" != "off")
-          {
-            fs.${config.mountpoint} = ''
-              if findmnt ${config._name} "${rootMountPoint}${config.mountpoint}" >/dev/null 2>&1; then
-                umount "${rootMountPoint}${config.mountpoint}"
-              fi
-            '';
-          };
+        //
+          lib.optionalAttrs
+            (config.options.mountpoint or "" != "none" && config.options.canmount or "" != "off")
+            {
+              fs.${config.mountpoint} = ''
+                if findmnt ${config._name} "${rootMountPoint}${config.mountpoint}" >/dev/null 2>&1; then
+                  umount "${rootMountPoint}${config.mountpoint}"
+                fi
+              '';
+            };
     };
 
     _config = lib.mkOption {
@@ -166,8 +174,7 @@
               device = "${config._name}";
               fsType = "zfs";
               options =
-                config.mountOptions
-                ++ lib.optional ((config.options.mountpoint or "") != "legacy") "zfsutil";
+                config.mountOptions ++ lib.optional ((config.options.mountpoint or "") != "legacy") "zfsutil";
             };
           };
       description = "NixOS configuration";

@@ -40,6 +40,12 @@
       parent = config;
       device = "/dev/md/${config.name}";
     };
+    extraArgs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "--assume-clean" ];
+      description = "Extra arguments passed to `mdadm --create`";
+    };
     _meta = lib.mkOption {
       internal = true;
       readOnly = true;
@@ -63,6 +69,7 @@
             --metadata=${config.metadata} \
             --force \
             --homehost=any \
+            ${toString (lib.map lib.escapeShellArg config.extraArgs)} \
             "''${disk_devices[@]}"
           partprobe "/dev/md/${config.name}"
           udevadm trigger --subsystem-match=block
@@ -75,8 +82,19 @@
     };
     _mount = diskoLib.mkMountOption {
       inherit config options;
-      default = lib.optionalAttrs (config.content != null) config.content._mount;
-      # TODO we probably need to assemble the mdadm somehow
+      default =
+        let
+          content = lib.optionalAttrs (config.content != null) config.content._mount;
+        in
+        {
+          fs = content.fs or { };
+          dev = ''
+            if ! test -e "/dev/md/${config.name}"; then
+              mdadm --assemble --scan
+            fi
+            ${content.dev or ""}
+          '';
+        };
     };
     _unmount = diskoLib.mkUnmountOption {
       inherit config options;
@@ -85,7 +103,7 @@
           content = lib.optionalAttrs (config.content != null) config.content._unmount;
         in
         {
-          fs = content.fs;
+          fs = content.fs or { };
           dev = ''
             ${content.dev or ""}
             if [ -e "/dev/md/${config.name}" ]; then
@@ -108,7 +126,8 @@
               boot.initrd.services.swraid.enable = true;
             }
         )
-      ] ++ lib.optional (config.content != null) config.content._config;
+      ]
+      ++ lib.optional (config.content != null) config.content._config;
       description = "NixOS configuration";
     };
     _pkgs = lib.mkOption {

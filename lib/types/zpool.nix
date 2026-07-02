@@ -365,8 +365,28 @@ in
             if [ $continue -eq 1 ]; then
               zpool create -f "${config.name}" \
                 -R ${rootMountPoint} \
-                ${lib.concatStringsSep " " (lib.mapAttrsToList (n: v: "-o ${n}=${v}") config.options)} \
-                ${lib.concatStringsSep " " (lib.mapAttrsToList (n: v: "-O ${n}=${v}") config.rootFsOptions)} \
+                ${
+                  if
+                    (
+                      # NOTE; It might be necessary to validate the value of config.options.mountpoint too
+                      config.rootFsOptions.canmount or "" == "off"
+                    )
+                  then
+                    # Mountpoint of root(pool)-dataset could be non-empty and ZFS by default prevents shadowing mounts.
+                    "-m none"
+                  else
+                    ""
+                } \
+                ${
+                  lib.concatStringsSep " " (
+                    lib.mapAttrsToList (n: v: "-o ${n}=${lib.escapeShellArg v}") config.options
+                  )
+                } \
+                ${
+                  lib.concatStringsSep " " (
+                    lib.mapAttrsToList (n: v: "-O ${n}=${lib.escapeShellArg v}") config.rootFsOptions
+                  )
+                } \
                 ''${topology:+ $topology}
               if [[ $(zfs get -H mounted "${config.name}" | cut -f3) == "yes" ]]; then
                 zfs unmount "${config.name}"
